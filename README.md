@@ -49,3 +49,8 @@ KCQ-NexusAI 侧：`pnpm setup`（克隆本仓库到同级目录）→ `pnpm conn
 ```bash
 uv run pytest            # 对齐/去重/收线判定/路由测试，无需 MT5 终端
 ```
+
+## License
+
+[MIT](LICENSE)
+
