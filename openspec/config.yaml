@@ -1,0 +1,42 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+context: |
+  KCQ-MT5-connector — KCQ 的 MT5 本地终端行情连接器（Exness）。
+
+  Tech stack: Python 3.12, FastAPI, uvicorn, pandas, MetaTrader5 (Windows-only IPC), uv, pytest.
+  Consumer: KCQ-NexusAI (pnpm monorepo) 的 core 行情层经 V1 协议 + SSE 消费本服务。
+
+  Domain:
+  - MetaTrader5 Python 包只能 IPC 读本机已登录终端（Windows），无推送回调，只能轮询。
+  - MT5 时间戳是「服务器墙钟按 UTC epoch 解释」的伪 UTC，必须实测服务器偏移转真 UTC。
+  - Exness 高周期 K 线锚 Europe/Athens（EET/EEST 自动 DST）；加密品种锚 UTC（币安标准）；
+    周日短棒在重采样中自然并入周一首根，禁止剔除。
+
+  Conventions:
+  - 注释正文用中文，技术用语保留英文；每个模块/函数有职责注释。
+  - MetaTrader5 调用必须经 app/gateway.py 的单工作线程串行执行，其他模块禁止直接 import MetaTrader5。
+  - 全部可调参数集中在 app/config.py（env → Settings），禁止散落 os.environ。
+  - 测试用 FakeGateway 替身，pytest 无需 MT5 终端即可全量回归。
+  - Conventional Commits（无 fork 前缀）。
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+rules:
+  proposal:
+    - Keep proposals under 500 words
+    - Always include a "Non-goals" section
+  spec:
+    - Requirements use RFC 2119 style SHALL; each requirement has at least one #### Scenario block
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+operations:
+  apply:
+    guidance:
+      - Run `uv run pytest` after each task; tests must pass without a real MT5 terminal
+  archive:
+    guidance:
+      - Summarize the archive outcome before finishing
