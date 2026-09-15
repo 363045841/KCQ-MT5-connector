@@ -1,0 +1,75 @@
+# 环境配置：全部可调参数集中于此，其余模块只读 Settings，禁止散落 os.environ。
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+# 对齐模式合法取值
+ALIGN_MODES = ("auto", "gmt2", "gmt3", "off")
+
+
+def _parse_bool(raw: str | None, default: bool) -> bool:
+    """解析布尔环境变量；缺省回落 default，非法值视为 default。"""
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+@dataclass(frozen=True)
+class Settings:
+    """连接器运行配置（由 load_settings 从环境读取）。"""
+
+    port: int = 8090
+    # MT5 终端全路径；缺省时自动探测已知 Exness 安装路径
+    terminal_path: str | None = None
+    # 仅允许 Exness 平台（公司/服务器名校验）
+    exness_only: bool = True
+    # 对齐模式：auto=检测到 Exness 才对齐 / gmt2 / gmt3 / off
+    align_mode: str = "auto"
+    # 服务器 UTC 偏移覆盖（小时）；缺省走实测
+    server_utc_offset_override: int | None = None
+    # 活跃订阅轮询基线（秒）：tick 探针间隔
+    active_poll_seconds: float = 1.0
+    # 无观察者后的残留轮询基线（秒）
+    background_poll_seconds: float = 5.0
+    # 静默退避封顶（秒）
+    quiet_backoff_cap_seconds: float = 30.0
+    # 终端连接心跳间隔（秒）
+    heartbeat_seconds: float = 5.0
+    # SSE keepalive 注释帧间隔（秒）
+    sse_keepalive_seconds: float = 15.0
+    # 每流环形缓冲帧数（Last-Event-ID 重放窗口）
+    ring_buffer_frames: int = 500
+    # 订阅建立时快照推送的尾部根数
+    snapshot_bars: int = 2
+    # 服务器偏移复测间隔（秒）
+    clock_recheck_seconds: float = 300.0
+
+
+def load_settings(env: dict[str, str] | None = None) -> Settings:
+    """从环境变量构造 Settings；非法值回落默认并保持启动不中断。"""
+    source = dict(os.environ if env is None else env)
+
+    align_raw = source.get("ALIGN_TZ", "auto").strip().lower()
+    if align_raw not in ALIGN_MODES:
+        align_raw = "auto"
+
+    offset_raw = source.get("EXNESS_SERVER_UTC_OFFSET", "").strip()
+    try:
+        offset_override = int(offset_raw.replace("+", "")) if offset_raw else None
+    except ValueError:
+        offset_override = None
+
+    try:
+        port = int(source.get("MT5_PORT", "8090"))
+    except ValueError:
+        port = 8090
+
+    return Settings(
+        port=port,
+        terminal_path=source.get("MT5_TERMINAL_PATH", "").strip() or None,
+        exness_only=_parse_bool(source.get("EXNESS_ONLY"), True),
+        align_mode=align_raw,
+        server_utc_offset_override=offset_override,
+    )
