@@ -119,11 +119,27 @@ async def probe(request: Request) -> dict:
         message = str(exc)
 
     aligned = _alignment_enabled(settings, gateway) if status != "offline" else False
-    anchor_label = "crypto=UTC, other=Europe/Athens"
+    anchor_label = "Europe/Athens"
     if settings.align_mode == "gmt2":
-        anchor_label = "crypto=UTC, other=GMT+2"
+        anchor_label = "GMT+2"
     elif settings.align_mode == "gmt3":
-        anchor_label = "crypto=UTC, other=GMT+3"
+        anchor_label = "GMT+3"
+    elif settings.align_mode == "off":
+        anchor_label = "off"
+
+    # 状态补充说明：离线时是诊断原因，在线时是对齐摘要（前端聚合源管理直接展示）
+    if status == "offline":
+        pass
+    elif not aligned:
+        message = "对齐关闭（原生周期）"
+    else:
+        offset = clock.offset_minutes()
+        source_kind = "实测" if clock.is_measured() else "默认"
+        if settings.server_utc_offset_override is not None:
+            source_kind = "配置"
+        offset_hours = offset / 60
+        offset_text = f"{offset_hours:+g}h" if offset % 60 == 0 else f"{offset}min"
+        message = f"对齐 {anchor_label} · 偏移 {offset_text}（{source_kind}）"
 
     return _ok(
         {
