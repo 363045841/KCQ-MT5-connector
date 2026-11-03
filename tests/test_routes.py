@@ -64,15 +64,15 @@ def test_search_returns_instrument_descriptors(client: TestClient):
     assert item["symbol"] == "XAUUSD"
     assert item["sourceId"] == "mt5"
     assert item["sessionId"] == "MT5"
-    assert item["assetClass"] == "forex"
+    assert item["instrumentType"] == "forex"
     assert item["providerRef"] == {"symbol": "XAUUSD"}
     assert "4h" in item["capabilities"]["bars"]["periods"]
 
 
-def test_search_rejects_unknown_asset_class(client: TestClient):
+def test_search_rejects_unknown_instrument_type(client: TestClient):
     resp = client.post(
         "/api/v1/market-data/instruments/search",
-        json={"sourceId": "mt5", "keyword": "x", "limit": 5, "assetClasses": ["commodity"]},
+        json={"sourceId": "mt5", "keyword": "x", "limit": 5, "instrumentTypes": ["commodity"]},
     )
 
     assert resp.status_code == 400

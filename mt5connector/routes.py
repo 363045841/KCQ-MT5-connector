@@ -28,7 +28,7 @@ from .config import Settings
 from .frames import Bar, frame_payload
 from .gateway import Mt5Gateway
 from .hub import RingEntry, StreamHub
-from .symbols import ASSET_CLASSES, guess_asset_class, search_symbols
+from .symbols import INSTRUMENT_TYPES, guess_instrument_type, search_symbols
 from .ticks import TickAggregator, tick_stream_key
 
 SOURCE_ID = "mt5"
@@ -82,7 +82,7 @@ class SearchRequest(BaseModel):
     sourceId: str
     keyword: str = Field(min_length=1, max_length=128)
     limit: int = Field(ge=1, le=100)
-    assetClasses: list[str] | None = None
+    instrumentTypes: list[str] | None = None
 
 
 class InstrumentReference(BaseModel):
@@ -176,7 +176,7 @@ async def probe(request: Request) -> dict:
             ),
             # capabilities 是前端 SourceRouter 的流转筛选依据，必须随 probe 上报
             "capabilities": {
-                "assetClasses": list(ASSET_CLASSES),
+                "instrumentTypes": list(INSTRUMENT_TYPES),
                 "bars": {"periods": list(SUPPORTED_PERIODS), "adjustments": list(SUPPORTED_ADJUSTMENTS), "barAggregations": list(BAR_AGGREGATIONS)},
                 # 实时 K 线能力：/stream 对全部已声明周期提供 SSE 推送，供前端精确判定，
                 # 不再用 marketTicks 等相邻能力推断
@@ -198,15 +198,15 @@ async def search_instruments(body: SearchRequest, request: Request):
     gateway: Mt5Gateway = request.app.state.gateway
     if body.sourceId != SOURCE_ID:
         return _error("INVALID_REQUEST", f"unknown sourceId: {body.sourceId}", 400)
-    invalid = [cls for cls in (body.assetClasses or []) if cls not in ASSET_CLASSES]
+    invalid = [cls for cls in (body.instrumentTypes or []) if cls not in INSTRUMENT_TYPES]
     if invalid:
-        return _error("INVALID_REQUEST", f"unknown assetClasses: {invalid}", 400)
+        return _error("INVALID_REQUEST", f"unknown instrumentTypes: {invalid}", 400)
     try:
         catalog = await gateway.symbols()
     except Exception as exc:  # noqa: BLE001 — 终端不可用统一 502
         return _error("UPSTREAM_UNAVAILABLE", str(exc), 502)
 
-    matched = search_symbols(catalog, body.keyword, body.limit, body.assetClasses)
+    matched = search_symbols(catalog, body.keyword, body.limit, body.instrumentTypes)
     items = [_descriptor(meta) for meta in matched]
     return _ok({"items": items})
 
@@ -218,7 +218,7 @@ def _descriptor(meta) -> dict:
         "sourceId": SOURCE_ID,
         "symbol": meta.name,
         "name": meta.description or meta.name,
-        "assetClass": guess_asset_class(meta.name),
+        "instrumentType": guess_instrument_type(meta.name),
         "exchange": "MT5",
         "sessionId": "MT5",
         "providerRef": {"symbol": meta.name},
@@ -260,7 +260,7 @@ async def trading_calendar(body: TradingCalendarRequest, request: Request):
     if body.period not in SUPPORTED_PERIODS:
         return _error("INVALID_REQUEST", f"unsupported period: {body.period}", 400)
     step_ms = _PERIOD_SECONDS[body.period] * 1000
-    crypto = guess_asset_class(body.instrument.symbol) == "crypto"
+    crypto = guess_instrument_type(body.instrument.symbol) == "crypto"
 
     future: list[int] = []
     cursor = body.anchorTimestamp

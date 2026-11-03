@@ -7,9 +7,9 @@
 
 ## Requirements
 
-### Requirement: 资产类别启发式映射
+### Requirement: 品种类型启发式映射
 
-系统 SHALL 按 symbol 命名判定资产类别并映射到协议枚举：加密前缀
+系统 SHALL 按 symbol 命名判定品种类型并映射到协议枚举：加密前缀
 （BTC/ETH/LTC/XRP/SOL/DOGE/ADA/BNB/DOT/AVAX）→ crypto；指数 CFD 前缀
 （US500/NAS100/US30/US100/USTEC/GER40/UK100/JP225/HK50/AUS200）→ index；
 贵金属现货前缀（XAU/XAG/XPT/XPD）→ forex（现货报价）；主要法币对后缀
@@ -18,17 +18,17 @@
 #### Scenario: 贵金属映射
 
 - **WHEN** symbol 为 XAUUSD
-- **THEN** assetClass 为 forex（现货贵金属与外汇同口径）
+- **THEN** instrumentType 为 forex（现货贵金属与外汇同口径）
 
 #### Scenario: 无法判定
 
 - **WHEN** symbol 不匹配任何启发式
-- **THEN** assetClass 为 unknown（不猜测）
+- **THEN** instrumentType 为 unknown（不猜测）
 
 ### Requirement: 关键字搜索契约
 
 搜索 SHALL 对品种代码与描述做大小写不敏感的子串匹配，按代码序返回前 limit 条；
-assetClasses 过滤参数 SHALL 与启发式结果求交。结果描述符 SHALL 满足：
+instrumentTypes 过滤参数 SHALL 与启发式结果求交。结果描述符 SHALL 满足：
 id=`mt5:<SYMBOL>`、sourceId=`mt5`、sessionId=`MT5`（对应前端注册的 7x24 UTC 会话）、
 providerRef=`{symbol}` 原样回传、capabilities 声明全部支持周期与 `none` 复权。
 

@@ -14,7 +14,7 @@
 系统 SHALL 提供 `GET /api/v1/market-data/sources/mt5/probe`，返回
 `status`（online/degraded/offline）、`checkedAt`、`latencyMs`，以及
 `alignment`（enabled/anchor/serverOffsetMinutes/offsetMeasured）和 `capabilities`
-（assetClasses + bars periods/adjustments + liveBars 实时 K 线能力）。探测失败 SHALL 返回 200 + offline，
+（instrumentTypes + bars periods/adjustments + liveBars 实时 K 线能力）。探测失败 SHALL 返回 200 + offline，
 而非 5xx——前端依赖 probe 判定可达性。
 
 #### Scenario: 终端在线
@@ -32,18 +32,18 @@
 ### Requirement: 品种目录搜索遵循协议校验
 
 系统 SHALL 提供 `POST /api/v1/market-data/instruments/search`：sourceId 必须为 `mt5`，
-assetClasses 必须是协议枚举子集（否则 400 INVALID_REQUEST）；命中项映射为
+instrumentTypes 必须是协议枚举子集（否则 400 INVALID_REQUEST）；命中项映射为
 InstrumentDescriptor（id=`mt5:<SYMBOL>`、sessionId=`MT5`、providerRef=`{symbol}`、
 tickSize/lotSize 来自终端元数据）。终端不可用时 SHALL 返回 502 UPSTREAM_UNAVAILABLE。
 
 #### Scenario: 关键字命中
 
 - **WHEN** 关键字匹配品种代码或描述（大小写不敏感）
-- **THEN** 返回去重后的描述符列表，assetClass 由命名启发式判定（无法判定为 unknown）
+- **THEN** 返回去重后的描述符列表，instrumentType 由命名启发式判定（无法判定为 unknown）
 
-#### Scenario: 非法 assetClasses
+#### Scenario: 非法 instrumentTypes
 
-- **WHEN** 请求携带协议枚举之外的 assetClass（如 `commodity`）
+- **WHEN** 请求携带协议枚举之外的 instrumentType（如 `commodity`）
 - **THEN** 返回 400，error.code 为 `INVALID_REQUEST`
 
 ### Requirement: K 线端点游标分页与能力校验
