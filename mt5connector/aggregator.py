@@ -15,6 +15,7 @@ from .config import Settings
 from .frames import Bar, ClosedFrame, FormingFrame, Frame, SnapshotFrame, StatusFrame
 from .gateway import Mt5Gateway
 from .hub import StreamHub, StreamKey
+from .symbols import instrument_id
 
 logger = logging.getLogger("mt5.aggregator")
 
@@ -32,9 +33,8 @@ _PERIOD_SECONDS = {
 class ChangeDetector:
     """尾部序列变化检测：输入升序尾部（≤ 数根，末位为 forming），输出帧序列。"""
 
-    def __init__(self, symbol: str, period: str):
-        self._symbol = symbol
-        self._period = period
+    def __init__(self, instrument_id: str):
+        self._instrument_id = instrument_id
         self._tail: tuple[Bar, ...] = ()
 
     def sample(self, bars: list[Bar]) -> list[Frame]:
@@ -50,7 +50,7 @@ class ChangeDetector:
     def _diff(self, prev: tuple[Bar, ...], next_: tuple[Bar, ...]) -> list[Frame]:
         """比较相邻两次尾部采样，产出 snapshot/closed/forming 帧。"""
         if not prev:
-            return [SnapshotFrame(self._symbol, self._period, next_)]
+            return [SnapshotFrame(self._instrument_id, next_)]
 
         prev_by_time = {bar.time_ms: bar for bar in prev}
         next_by_time = {bar.time_ms: bar for bar in next_}
@@ -62,7 +62,7 @@ class ChangeDetector:
         # 收线判定：forming openTime 前移 → 旧 forming 收线（以新采样中的终值优先，容忍缓存滞后）
         if next_forming.time_ms > prev_forming.time_ms:
             finalized = next_by_time.get(prev_forming.time_ms, prev_forming)
-            frames.append(ClosedFrame(self._symbol, self._period, finalized))
+            frames.append(ClosedFrame(self._instrument_id, finalized))
             covered_ts = finalized.time_ms  # 终值已随 closed 帧下发，内容环不再重复发
 
         # 内容变化帧：新出现或 OHLCV 变化的根（含收线后仍被终端修订的旧根）
@@ -71,7 +71,7 @@ class ChangeDetector:
                 continue
             old = prev_by_time.get(bar.time_ms)
             if old is None or old != bar:
-                frames.append(FormingFrame(self._symbol, self._period, bar))
+                frames.append(FormingFrame(self._instrument_id, bar))
         return frames
 
 
@@ -142,7 +142,7 @@ class Aggregator:
     async def _poll(self, key: StreamKey) -> None:
         """单流轮询主循环：首采样出快照，之后报价探针驱动 + 静默退避。"""
         symbol, period, bar_aggregation = key
-        detector = ChangeDetector(symbol, period)
+        detector = ChangeDetector(instrument_id(symbol))
         align_enabled = bar_aggregation == ALIGNED_BAR_AGGREGATION
         # europe-traditional 4h 与 aligned 同走 H1 重采样，但用 NY-close 日界
         # （对齐主流经纪商 4h 收线时间）；merge_sunday_bars 仅适用于日线。
@@ -172,7 +172,7 @@ class Aggregator:
                 if key in self._resnapshot:
                     # 新订阅要求快照：复位检测器，本轮采样输出 SnapshotFrame
                     self._resnapshot.discard(key)
-                    detector = ChangeDetector(symbol, period)
+                    detector = ChangeDetector(instrument_id(symbol))
 
                 now = asyncio.get_running_loop().time()
                 if (
@@ -196,7 +196,7 @@ class Aggregator:
                     market_open = open_now
                     if open_now is not None:
                         status = "open" if open_now else "closed"
-                        self._hub.publish(key, StatusFrame(symbol, period, status))
+                        self._hub.publish(key, StatusFrame(instrument_id(symbol), status))
 
                 if not first_sample_done and not woken and not quote_tick_changed:
                     quiet += 1
@@ -211,7 +211,7 @@ class Aggregator:
                 raise
             except Exception as exc:  # noqa: BLE001 — 单流故障不拖垮全局
                 logger.warning("poll %s failed: %s", key, exc)
-                self._hub.publish(key, StatusFrame(symbol, period, "degraded", str(exc)))
+                self._hub.publish(key, StatusFrame(instrument_id(symbol), "degraded", str(exc)))
                 quiet += 1
             next_interval = self._current_interval(key, quiet)
 

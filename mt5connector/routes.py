@@ -25,13 +25,20 @@ from .bar_aggregation import (
 )
 from .clock import ServerClock
 from .config import Settings
-from .frames import Bar, frame_payload
+from .frames import Bar, frame_payload, quote_payload
 from .gateway import Mt5Gateway
 from .hub import RingEntry, StreamHub
-from .symbols import ASSET_CLASSES, guess_asset_class, search_symbols
+from .quotes import QuoteProjection
+from .symbols import (
+    INSTRUMENT_TYPES,
+    SOURCE_ID,
+    guess_instrument_type,
+    instrument_id,
+    search_symbols,
+    symbol_from_instrument_id,
+)
 from .ticks import TickAggregator, tick_stream_key
 
-SOURCE_ID = "mt5"
 SUPPORTED_PERIODS = ("1min", "5min", "15min", "30min", "60min", "4h", "daily", "weekly", "monthly")
 SUPPORTED_ADJUSTMENTS = ("none",)
 MAX_BAR_LIMIT = 1000
@@ -82,7 +89,7 @@ class SearchRequest(BaseModel):
     sourceId: str
     keyword: str = Field(min_length=1, max_length=128)
     limit: int = Field(ge=1, le=100)
-    assetClasses: list[str] | None = None
+    instrumentTypes: list[str] | None = None
 
 
 class InstrumentReference(BaseModel):
@@ -176,7 +183,7 @@ async def probe(request: Request) -> dict:
             ),
             # capabilities 是前端 SourceRouter 的流转筛选依据，必须随 probe 上报
             "capabilities": {
-                "assetClasses": list(ASSET_CLASSES),
+                "instrumentTypes": list(INSTRUMENT_TYPES),
                 "bars": {"periods": list(SUPPORTED_PERIODS), "adjustments": list(SUPPORTED_ADJUSTMENTS), "barAggregations": list(BAR_AGGREGATIONS)},
                 # 实时 K 线能力：/stream 对全部已声明周期提供 SSE 推送，供前端精确判定，
                 # 不再用 marketTicks 等相邻能力推断
@@ -198,15 +205,15 @@ async def search_instruments(body: SearchRequest, request: Request):
     gateway: Mt5Gateway = request.app.state.gateway
     if body.sourceId != SOURCE_ID:
         return _error("INVALID_REQUEST", f"unknown sourceId: {body.sourceId}", 400)
-    invalid = [cls for cls in (body.assetClasses or []) if cls not in ASSET_CLASSES]
+    invalid = [cls for cls in (body.instrumentTypes or []) if cls not in INSTRUMENT_TYPES]
     if invalid:
-        return _error("INVALID_REQUEST", f"unknown assetClasses: {invalid}", 400)
+        return _error("INVALID_REQUEST", f"unknown instrumentTypes: {invalid}", 400)
     try:
         catalog = await gateway.symbols()
     except Exception as exc:  # noqa: BLE001 — 终端不可用统一 502
         return _error("UPSTREAM_UNAVAILABLE", str(exc), 502)
 
-    matched = search_symbols(catalog, body.keyword, body.limit, body.assetClasses)
+    matched = search_symbols(catalog, body.keyword, body.limit, body.instrumentTypes)
     items = [_descriptor(meta) for meta in matched]
     return _ok({"items": items})
 
@@ -214,11 +221,11 @@ async def search_instruments(body: SearchRequest, request: Request):
 def _descriptor(meta) -> dict:
     """SymbolMeta → V1 InstrumentDescriptor。"""
     item: dict = {
-        "id": f"{SOURCE_ID}:{meta.name}",
+        "id": instrument_id(meta.name),
         "sourceId": SOURCE_ID,
         "symbol": meta.name,
         "name": meta.description or meta.name,
-        "assetClass": guess_asset_class(meta.name),
+        "instrumentType": guess_instrument_type(meta.name),
         "exchange": "MT5",
         "sessionId": "MT5",
         "providerRef": {"symbol": meta.name},
@@ -260,7 +267,7 @@ async def trading_calendar(body: TradingCalendarRequest, request: Request):
     if body.period not in SUPPORTED_PERIODS:
         return _error("INVALID_REQUEST", f"unsupported period: {body.period}", 400)
     step_ms = _PERIOD_SECONDS[body.period] * 1000
-    crypto = guess_asset_class(body.instrument.symbol) == "crypto"
+    crypto = guess_instrument_type(body.instrument.symbol) == "crypto"
 
     future: list[int] = []
     cursor = body.anchorTimestamp
@@ -437,26 +444,63 @@ async def _load_series(
 
     return series[-limit:]
 
+# ── 批量实时订阅 ──
 
-# ── SSE 实时流 ──
+# SSE 响应头；所有实时端点共用
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+
+
+def _parse_instruments(raw: str) -> list[tuple[str, str]]:
+    """解析 instruments 参数，返回 (instrumentId, 终端品种名) 并保持请求顺序。
+
+    重复 ID 只保留首个；前缀不匹配视为协议错误，不做 symbol 猜测。
+    """
+    parsed: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        value = part.strip()
+        if not value or value in seen:
+            continue
+        symbol = symbol_from_instrument_id(value)
+        if symbol is None:
+            raise ValueError(f"unknown instrumentId: {value}")
+        seen.add(value)
+        parsed.append((value, symbol))
+    if not parsed:
+        raise ValueError("instruments is required")
+    return parsed
+
+
+async def _pump(source: asyncio.Queue[RingEntry], sink: asyncio.Queue[RingEntry]) -> None:
+    """把一个流队列的帧转发到连接级队列，让一条 SSE 承载多个品种。"""
+    while True:
+        await sink.put(await source.get())
+
+
+def _sse_data(payload: dict[str, object]) -> str:
+    """帧 → 无 id 的 SSE 数据报文；批量连接每次（重）连都重新下发快照。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @router.get("/sources/mt5/stream")
 async def stream(
-    symbol: str,
+    instruments: str,
     period: str,
     request: Request,
     barAggregation: BarAggregation | None = None,
 ):
-    """单连接固定订阅一个 (symbol, period, barAggregation)；切换任一维度均断开重连。
-
-    断线重连凭 Last-Event-ID 从环形缓冲补帧；无 ID 视为新订阅（下发快照）。
-    """
+    """一个连接承载一组品种的实时 K 线；周期与聚合是连接参数，帧只带 instrumentId。"""
     state = request.app.state
     if period not in SUPPORTED_PERIODS:
         return _error("UNSUPPORTED_CAPABILITY", f"unsupported period: {period}", 400)
-    if not symbol.strip():
-        return _error("INVALID_REQUEST", "symbol is required", 400)
+    try:
+        parsed = _parse_instruments(instruments)
+    except ValueError as exc:
+        return _error("INVALID_REQUEST", str(exc), 400)
 
     bar_aggregation = _resolve_aggregation(state.gateway, barAggregation)
     if bar_aggregation == ALIGNED_BAR_AGGREGATION and not _alignment_enabled(state.settings):
@@ -465,47 +509,85 @@ async def stream(
     hub: StreamHub = state.hub
     aggregator: Aggregator = state.aggregator
     settings: Settings = state.settings
-    # MT5 品种名大小写敏感，直接使用请求的品种名，不做大小写归一
-    key = (symbol.strip(), period, bar_aggregation)
-
-    last_id_raw = request.headers.get("last-event-id")
-    last_id = int(last_id_raw) if last_id_raw and last_id_raw.isdigit() else None
-
-    queue = hub.register(key)
-    # 基准 seq 必须在 ensure()（触发快照发布）之前捕获，否则快照帧会被去重逻辑误跳过
-    base_seq = last_id if last_id is not None else hub.last_seq(key)
-    aggregator.ensure(key, resnapshot=last_id is None)
+    # MT5 品种名大小写敏感，直接使用请求里的品种名，不做大小写归一
+    subscriptions = [
+        ((symbol, period, bar_aggregation), hub.register((symbol, period, bar_aggregation)))
+        for _, symbol in parsed
+    ]
+    for key, _ in subscriptions:
+        aggregator.ensure(key, resnapshot=True)
 
     async def event_stream():
+        sink: asyncio.Queue[RingEntry] = asyncio.Queue()
+        pumps = [asyncio.create_task(_pump(queue, sink)) for _, queue in subscriptions]
         try:
-            # 新订阅（无 Last-Event-ID）从当前位置开始，靠 resnapshot 快照同步；
-            # 重连订阅凭 Last-Event-ID 补帧，重放与队列重叠按 seq 去重。
-            last_sent = base_seq
-            for entry in hub.replay(key, last_sent):
-                last_sent = entry.seq
-                yield _sse_chunk(entry)
             while True:
                 try:
                     entry = await asyncio.wait_for(
-                        queue.get(), timeout=settings.sse_keepalive_seconds
+                        sink.get(), timeout=settings.sse_keepalive_seconds
                     )
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                if entry.seq <= last_sent:
-                    continue  # 重放与队列重叠去重
-                last_sent = entry.seq
-                yield _sse_chunk(entry)
+                yield _sse_data(frame_payload(entry.frame))
         finally:
-            hub.unregister(key, queue)
-            aggregator.release(key)
+            for pump in pumps:
+                pump.cancel()
+            for key, queue in subscriptions:
+                hub.unregister(key, queue)
+                aggregator.release(key)
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.get("/sources/mt5/quotes")
+async def quotes(instruments: str, request: Request):
+    """报价是日线实时流的投影：最新价与昨收，不引入第二条上游查询路径。"""
+    state = request.app.state
+    try:
+        parsed = _parse_instruments(instruments)
+    except ValueError as exc:
+        return _error("INVALID_REQUEST", str(exc), 400)
+
+    aggregation = _resolve_aggregation(state.gateway, None)
+    if aggregation == ALIGNED_BAR_AGGREGATION and not _alignment_enabled(state.settings):
+        return _error("UNSUPPORTED_CAPABILITY", "aligned bar aggregation is unavailable", 400)
+
+    hub: StreamHub = state.hub
+    aggregator: Aggregator = state.aggregator
+    settings: Settings = state.settings
+    subscriptions = [
+        ((symbol, "daily", aggregation), hub.register((symbol, "daily", aggregation)))
+        for _, symbol in parsed
+    ]
+    for key, _ in subscriptions:
+        aggregator.ensure(key, resnapshot=True)
+
+    projection = QuoteProjection()
+
+    async def event_stream():
+        sink: asyncio.Queue[RingEntry] = asyncio.Queue()
+        pumps = [asyncio.create_task(_pump(queue, sink)) for _, queue in subscriptions]
+        try:
+            while True:
+                try:
+                    entry = await asyncio.wait_for(
+                        sink.get(), timeout=settings.sse_keepalive_seconds
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                quote = projection.push(entry.frame)
+                if quote is not None:
+                    yield _sse_data(quote)
+        finally:
+            for pump in pumps:
+                pump.cancel()
+            for key, queue in subscriptions:
+                hub.unregister(key, queue)
+                aggregator.release(key)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @router.get("/sources/mt5/ticks/stream")
@@ -555,15 +637,10 @@ async def ticks_stream(symbol: str, request: Request):
             hub.unregister(key, queue)
             tick_aggregator.release(normalized)
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
-    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 def _sse_chunk(entry: RingEntry) -> str:
-    """帧 → SSE 报文（id 供 Last-Event-ID 重放）。"""
+    """单流帧 → 带 id 的 SSE 报文（供 Last-Event-ID 重放）。"""
     payload = json.dumps(frame_payload(entry.frame), ensure_ascii=False)
     return f"id: {entry.seq}\ndata: {payload}\n\n"

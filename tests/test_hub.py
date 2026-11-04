@@ -7,7 +7,7 @@ from mt5connector.hub import StreamHub
 
 
 def _frame(detail: str = "x"):
-    return StatusFrame("XAUUSD", "4h", "open", detail)
+    return StatusFrame("mt5:XAUUSD", "open", detail)
 
 
 def test_publish_assigns_monotonic_seq_per_stream():
@@ -89,10 +89,9 @@ def test_subscriber_fanout_and_unregister():
 def test_snapshot_frame_payload_shape():
     from mt5connector.frames import Bar, SnapshotFrame, frame_payload
 
-    frame = SnapshotFrame("XAUUSD", "4h", (Bar(1000, 1, 2, 0.5, 1.5, 10, 0),))
+    frame = SnapshotFrame("mt5:XAUUSD", (Bar(1000, 1, 2, 0.5, 1.5, 10, 0),))
     payload = frame_payload(frame)
     assert payload["type"] == "snapshot"
-    assert payload["symbol"] == "XAUUSD"
-    assert payload["period"] == "4h"
+    assert payload["instrumentId"] == "mt5:XAUUSD"
     assert payload["bars"][0]["timestamp"] == 1000
     assert payload["bars"][0]["close"] == 1.5

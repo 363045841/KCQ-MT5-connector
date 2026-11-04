@@ -1,4 +1,5 @@
 # K 线与实时帧的数据模型：aggregator/hub/routes 共用，禁止各处重复定义。
+# K 线帧的身份一律是 instrumentId（数据源范围内稳定 ID），连接参数（周期/聚合）不再逐帧重复。
 
 from __future__ import annotations
 
@@ -22,8 +23,7 @@ class Bar:
 class SnapshotFrame:
     """订阅建立时的尾部快照（含最后一根收线与当前 forming）。"""
 
-    symbol: str
-    period: str
+    instrument_id: str
     bars: tuple[Bar, ...]
 
 
@@ -31,8 +31,7 @@ class SnapshotFrame:
 class FormingFrame:
     """forming bar 内容更新（时间戳不变、OHLCV 变化）。"""
 
-    symbol: str
-    period: str
+    instrument_id: str
     bar: Bar
 
 
@@ -40,8 +39,7 @@ class FormingFrame:
 class ClosedFrame:
     """一根 bar 收线（openTime 前移后旧根终值，含终端缓存滞后的修订）。"""
 
-    symbol: str
-    period: str
+    instrument_id: str
     bar: Bar
 
 
@@ -49,8 +47,7 @@ class ClosedFrame:
 class StatusFrame:
     """流级状态变化（行情开闭/连接异常），不携带 bar。"""
 
-    symbol: str
-    period: str
+    instrument_id: str
     status: str
     detail: str = ""
 
@@ -97,22 +94,20 @@ def frame_type(frame: Frame) -> str:
 def frame_payload(frame: Frame) -> dict[str, object]:
     """把帧序列化为 JSON 载荷（bar 字段展平为 V1 KLineItem 形状）。"""
     match frame:
-        case SnapshotFrame(symbol, period, bars):
+        case SnapshotFrame(instrument_id, bars):
             return {
                 "type": "snapshot",
-                "symbol": symbol,
-                "period": period,
+                "instrumentId": instrument_id,
                 "bars": [bar_to_dict(bar) for bar in bars],
             }
-        case FormingFrame(symbol, period, bar):
-            return {"type": "forming", "symbol": symbol, "period": period, "bar": bar_to_dict(bar)}
-        case ClosedFrame(symbol, period, bar):
-            return {"type": "closed", "symbol": symbol, "period": period, "bar": bar_to_dict(bar)}
-        case StatusFrame(symbol, period, status, detail):
+        case FormingFrame(instrument_id, bar):
+            return {"type": "forming", "instrumentId": instrument_id, "bar": bar_to_dict(bar)}
+        case ClosedFrame(instrument_id, bar):
+            return {"type": "closed", "instrumentId": instrument_id, "bar": bar_to_dict(bar)}
+        case StatusFrame(instrument_id, status, detail):
             return {
                 "type": "status",
-                "symbol": symbol,
-                "period": period,
+                "instrumentId": instrument_id,
                 "status": status,
                 "detail": detail,
             }
@@ -123,6 +118,17 @@ def frame_payload(frame: Frame) -> dict[str, object]:
                 "ticks": [tick_to_dict(tick) for tick in ticks],
             }
     raise TypeError(f"unknown frame: {frame!r}")
+
+
+def quote_payload(instrument_id: str, last: float, prev_close: float, timestamp: int) -> dict[str, object]:
+    """报价载荷：只给最新价与昨收，涨跌幅由消费端派生。"""
+    return {
+        "type": "quote",
+        "instrumentId": instrument_id,
+        "last": last,
+        "prevClose": prev_close,
+        "timestamp": timestamp,
+    }
 
 
 def bar_to_dict(bar: Bar) -> dict[str, float | int]:

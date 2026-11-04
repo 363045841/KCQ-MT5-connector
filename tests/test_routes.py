@@ -64,15 +64,15 @@ def test_search_returns_instrument_descriptors(client: TestClient):
     assert item["symbol"] == "XAUUSD"
     assert item["sourceId"] == "mt5"
     assert item["sessionId"] == "MT5"
-    assert item["assetClass"] == "forex"
+    assert item["instrumentType"] == "forex"
     assert item["providerRef"] == {"symbol": "XAUUSD"}
     assert "4h" in item["capabilities"]["bars"]["periods"]
 
 
-def test_search_rejects_unknown_asset_class(client: TestClient):
+def test_search_rejects_unknown_instrument_type(client: TestClient):
     resp = client.post(
         "/api/v1/market-data/instruments/search",
-        json={"sourceId": "mt5", "keyword": "x", "limit": 5, "assetClasses": ["commodity"]},
+        json={"sourceId": "mt5", "keyword": "x", "limit": 5, "instrumentTypes": ["commodity"]},
     )
 
     assert resp.status_code == 400
@@ -251,11 +251,11 @@ def test_stream_emits_snapshot_frame(fake_gateway: FakeGateway):
     headers = {k.decode().lower(): v.decode() for k, v in start_msg["headers"]}
     assert headers["x-accel-buffering"] == "no"
     assert headers["content-type"].startswith("text/event-stream")
-    first_line, data_line = body.split("\n")[:2]
-    assert first_line.startswith("id: ")
+    data_line = body.split("\n")[0]
+
     payload = json.loads(data_line[len("data: "):])
     assert payload["type"] == "snapshot"
-    assert payload["symbol"] == "XAUUSD"
+    assert payload["instrumentId"] == "mt5:XAUUSD"
     assert len(payload["bars"]) == 2  # 快照含收线 + forming 尾部两根
 
 
@@ -266,11 +266,11 @@ def test_stream_preserves_symbol_case(fake_gateway: FakeGateway):
     app = create_app(settings=Settings(), gateway=fake_gateway)
     _, body = asyncio.run(_first_sse_chunk(app, symbol="XAUUSDm"))
 
-    first_line, data_line = body.split("\n")[:2]
-    assert first_line.startswith("id: ")
+    data_line = body.split("\n")[0]
+
     payload = json.loads(data_line[len("data: "):])
     assert payload["type"] == "snapshot"
-    assert payload["symbol"] == "XAUUSDm"
+    assert payload["instrumentId"] == "mt5:XAUUSDm"
 
 
 async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
@@ -283,7 +283,7 @@ async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
         "scheme": "http",
         "path": "/api/v1/market-data/sources/mt5/stream",
         "raw_path": b"/api/v1/market-data/sources/mt5/stream",
-        "query_string": f"symbol={symbol}&period=60min&barAggregation=original".encode(),
+        "query_string": f"instruments=mt5:{symbol}&period=60min&barAggregation=original".encode(),
         "root_path": "",
         "server": ("test", 80),
         "client": ("test", 1234),
@@ -329,7 +329,7 @@ async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
 def test_stream_rejects_unsupported_period(client: TestClient):
     resp = client.get(
         "/api/v1/market-data/sources/mt5/stream",
-        params={"symbol": "XAUUSD", "period": "yearly", "barAggregation": "original"},
+        params={"instruments": "mt5:XAUUSD", "period": "yearly", "barAggregation": "original"},
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "UNSUPPORTED_CAPABILITY"
@@ -525,11 +525,11 @@ def test_stream_emits_snapshot_frame(fake_gateway: FakeGateway):
     headers = {k.decode().lower(): v.decode() for k, v in start_msg["headers"]}
     assert headers["x-accel-buffering"] == "no"
     assert headers["content-type"].startswith("text/event-stream")
-    first_line, data_line = body.split("\n")[:2]
-    assert first_line.startswith("id: ")
+    data_line = body.split("\n")[0]
+
     payload = json.loads(data_line[len("data: "):])
     assert payload["type"] == "snapshot"
-    assert payload["symbol"] == "XAUUSD"
+    assert payload["instrumentId"] == "mt5:XAUUSD"
     assert len(payload["bars"]) == 2  # 快照含收线 + forming 尾部两根
 
 
@@ -540,11 +540,11 @@ def test_stream_preserves_symbol_case(fake_gateway: FakeGateway):
     app = create_app(settings=Settings(), gateway=fake_gateway)
     _, body = asyncio.run(_first_sse_chunk(app, symbol="XAUUSDm"))
 
-    first_line, data_line = body.split("\n")[:2]
-    assert first_line.startswith("id: ")
+    data_line = body.split("\n")[0]
+
     payload = json.loads(data_line[len("data: "):])
     assert payload["type"] == "snapshot"
-    assert payload["symbol"] == "XAUUSDm"
+    assert payload["instrumentId"] == "mt5:XAUUSDm"
 
 
 async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
@@ -557,7 +557,7 @@ async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
         "scheme": "http",
         "path": "/api/v1/market-data/sources/mt5/stream",
         "raw_path": b"/api/v1/market-data/sources/mt5/stream",
-        "query_string": f"symbol={symbol}&period=60min&barAggregation=original".encode(),
+        "query_string": f"instruments=mt5:{symbol}&period=60min&barAggregation=original".encode(),
         "root_path": "",
         "server": ("test", 80),
         "client": ("test", 1234),
@@ -603,7 +603,7 @@ async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
 def test_stream_rejects_unsupported_period(client: TestClient):
     resp = client.get(
         "/api/v1/market-data/sources/mt5/stream",
-        params={"symbol": "XAUUSD", "period": "yearly", "barAggregation": "original"},
+        params={"instruments": "mt5:XAUUSD", "period": "yearly", "barAggregation": "original"},
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "UNSUPPORTED_CAPABILITY"
@@ -755,3 +755,85 @@ def test_probe_and_descriptor_declare_trading_calendar(client: TestClient):
         json={"sourceId": "mt5", "keyword": "gold", "limit": 5},
     ).json()["data"]
     assert search["items"][0]["capabilities"]["tradingCalendar"] is True
+
+async def _collect_sse(app, path: str, query: str, complete, timeout: float = 5.0) -> str:
+    """裸 ASGI 调用收集 SSE 输出直到 complete(全文) 为真；TestClient 不支持无限流。"""
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": query.encode(),
+        "root_path": "",
+        "server": ("test", 80),
+        "client": ("test", 1234),
+        "headers": [(b"host", b"test")],
+    }
+    chunks: list[str] = []
+    reached = asyncio.Event()
+
+    async def receive():
+        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.body" and message.get("body"):
+            chunks.append(message["body"].decode())
+            if complete("".join(chunks)):
+                reached.set()
+
+    async with app.router.lifespan_context(app):
+        task = asyncio.create_task(app(scope, receive, send))
+        await asyncio.wait_for(reached.wait(), timeout=timeout)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    return "".join(chunks)
+
+
+def test_stream_serves_multiple_instruments(fake_gateway: FakeGateway):
+    start = datetime(2026, 8, 17, 0, 0, tzinfo=UTC)
+    fake_gateway.rates[("XAUUSD", "60min")] = _h1(start, 5)
+    fake_gateway.rates[("EURUSD", "60min")] = _h1(start, 5)
+    app = create_app(settings=Settings(), gateway=fake_gateway)
+
+    body = asyncio.run(
+        _collect_sse(
+            app,
+            "/api/v1/market-data/sources/mt5/stream",
+            "instruments=mt5:XAUUSD,mt5:EURUSD&period=60min&barAggregation=original",
+            lambda text: text.count('"type": "snapshot"') == 2,
+        )
+    )
+
+    assert '"instrumentId": "mt5:XAUUSD"' in body
+    assert '"instrumentId": "mt5:EURUSD"' in body
+
+
+def test_quotes_project_latest_and_previous_close(fake_gateway: FakeGateway):
+    day = datetime(2026, 8, 17, 0, 0, tzinfo=UTC)
+    fake_gateway.rates[("XAUUSD", "daily")] = [
+        Bar(_ms(day), 1, 2, 0.5, 10, 100, 0),
+        Bar(_ms(day + timedelta(days=1)), 1, 2, 0.5, 11, 100, 0),
+    ]
+    app = create_app(settings=Settings(), gateway=fake_gateway)
+
+    body = asyncio.run(
+        _collect_sse(
+            app,
+            "/api/v1/market-data/sources/mt5/quotes",
+            "instruments=mt5:XAUUSD",
+            lambda text: '"type": "quote"' in text,
+        )
+    )
+
+    line = next(line for line in body.splitlines() if '"type": "quote"' in line)
+    payload = json.loads(line[len("data: "):])
+    assert payload["instrumentId"] == "mt5:XAUUSD"
+    assert payload["last"] == 11
+    assert payload["prevClose"] == 10
