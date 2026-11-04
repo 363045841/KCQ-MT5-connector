@@ -7,6 +7,25 @@ from .gateway import SymbolMeta
 # 协议 InstrumentType 枚举（market-data-v1）
 INSTRUMENT_TYPES = ("stock", "index", "fund", "etf", "future", "option", "forex", "crypto", "unknown")
 
+# 数据源身份；品种 ID 与选择器、实时订阅、帧载荷共用同一前缀
+SOURCE_ID = "mt5"
+
+# 品种 ID 的稳定前缀；MT5 品种名大小写敏感，解析时不做归一
+_ID_PREFIX = f"{SOURCE_ID}:"
+
+
+def instrument_id(symbol: str) -> str:
+    """把终端品种名转换为协议里的稳定品种 ID。"""
+    return f"{_ID_PREFIX}{symbol}"
+
+
+def symbol_from_instrument_id(value: str) -> str | None:
+    """从协议品种 ID 还原终端品种名；前缀不匹配时返回 None。"""
+    if not value.startswith(_ID_PREFIX):
+        return None
+    symbol = value[len(_ID_PREFIX):].strip()
+    return symbol or None
+
 # 常见指数 CFD 前缀（Exness 命名惯例，尽力而为非精确）
 _INDEX_PREFIXES = (
     "US500", "NAS100", "US30", "US100", "USTEC", "GER40", "UK100", "JP225", "HK50", "AUS200",

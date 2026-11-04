@@ -11,7 +11,7 @@ def bar(ts: int, close: float = 1.5, volume: float = 100) -> Bar:
 
 
 def test_first_sample_emits_snapshot():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     frames = detector.sample([bar(1000), bar(2000, close=2.0)])
 
     assert len(frames) == 1
@@ -20,14 +20,14 @@ def test_first_sample_emits_snapshot():
 
 
 def test_unchanged_tail_emits_nothing():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     detector.sample([bar(1000), bar(2000, close=2.0)])
 
     assert detector.sample([bar(1000), bar(2000, close=2.0)]) == []
 
 
 def test_forming_content_change_emits_single_forming():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     detector.sample([bar(1000), bar(2000, close=2.0)])
 
     frames = detector.sample([bar(1000), bar(2000, close=2.5)])
@@ -38,7 +38,7 @@ def test_forming_content_change_emits_single_forming():
 
 
 def test_close_advance_emits_closed_then_forming():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     detector.sample([bar(1000), bar(2000, close=2.0)])
 
     frames = detector.sample([bar(2000, close=2.2), bar(3000, close=3.0)])
@@ -53,7 +53,7 @@ def test_close_advance_emits_closed_then_forming():
 
 
 def test_terminal_lag_revision_after_close_still_published():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     detector.sample([bar(1000), bar(2000, close=2.0)])
     detector.sample([bar(2000, close=2.2), bar(3000, close=3.0)])
 
@@ -67,7 +67,7 @@ def test_terminal_lag_revision_after_close_still_published():
 
 
 def test_weekend_gap_skips_missing_bars():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     detector.sample([bar(1000), bar(2000, close=2.0)])
 
     # 休市 gap：2000 与 5000 之间的根缺失，只发可见根
@@ -79,7 +79,7 @@ def test_weekend_gap_skips_missing_bars():
 
 
 def test_empty_sample_keeps_previous_tail_visible():
-    detector = ChangeDetector("XAUUSD", "4h")
+    detector = ChangeDetector("mt5:XAUUSD")
     detector.sample([bar(1000), bar(2000)])
 
     # 终端偶发返回空（品种暂无数据）：不发帧，不丢状态
