@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 
@@ -75,38 +76,41 @@ class TicksFrame:
 Frame = SnapshotFrame | FormingFrame | ClosedFrame | StatusFrame | TicksFrame
 
 
-def frame_type(frame: Frame) -> str:
-    """返回帧协议类型名（SSE 载荷 type 字段）。"""
-    match frame:
-        case SnapshotFrame():
-            return "snapshot"
-        case FormingFrame():
-            return "forming"
-        case ClosedFrame():
-            return "closed"
-        case StatusFrame():
-            return "status"
-        case TicksFrame():
-            return "ticks"
-    raise TypeError(f"unknown frame: {frame!r}")
-
-
-def frame_payload(frame: Frame) -> dict[str, object]:
-    """把帧序列化为 JSON 载荷（bar 字段展平为 V1 KLineItem 形状）。"""
+def frame_payload(frame: Frame, seq: int) -> dict[str, object]:
+    """把帧序列化为 V1.1 载荷：统一信封 seq/ts，增量帧带 state，身份一律 instrumentId。"""
+    ts = int(time.time() * 1000)
     match frame:
         case SnapshotFrame(instrument_id, bars):
             return {
                 "type": "snapshot",
+                "seq": seq,
+                "ts": ts,
                 "instrumentId": instrument_id,
                 "bars": [bar_to_dict(bar) for bar in bars],
             }
         case FormingFrame(instrument_id, bar):
-            return {"type": "forming", "instrumentId": instrument_id, "bar": bar_to_dict(bar)}
+            return {
+                "type": "bar",
+                "seq": seq,
+                "ts": ts,
+                "instrumentId": instrument_id,
+                "state": "forming",
+                "bar": bar_to_dict(bar),
+            }
         case ClosedFrame(instrument_id, bar):
-            return {"type": "closed", "instrumentId": instrument_id, "bar": bar_to_dict(bar)}
+            return {
+                "type": "bar",
+                "seq": seq,
+                "ts": ts,
+                "instrumentId": instrument_id,
+                "state": "closed",
+                "bar": bar_to_dict(bar),
+            }
         case StatusFrame(instrument_id, status, detail):
             return {
                 "type": "status",
+                "seq": seq,
+                "ts": ts,
                 "instrumentId": instrument_id,
                 "status": status,
                 "detail": detail,
@@ -114,20 +118,40 @@ def frame_payload(frame: Frame) -> dict[str, object]:
         case TicksFrame(symbol, ticks):
             return {
                 "type": "ticks",
+                "seq": seq,
+                "ts": ts,
                 "symbol": symbol,
                 "ticks": [tick_to_dict(tick) for tick in ticks],
             }
     raise TypeError(f"unknown frame: {frame!r}")
 
 
-def quote_payload(instrument_id: str, last: float, prev_close: float, timestamp: int) -> dict[str, object]:
-    """报价载荷：只给最新价与昨收，涨跌幅由消费端派生。"""
+def hello_payload(instruments: tuple[str, ...], snapshot_size: int) -> dict[str, object]:
+    """连接级 hello：回显订阅身份与快照条数，客户端据此确认服务端理解一致。"""
+    return {
+        "type": "hello",
+        "seq": -1,
+        "ts": int(time.time() * 1000),
+        "instruments": list(instruments),
+        "snapshotSize": snapshot_size,
+    }
+
+
+def ping_payload(seq: int) -> dict[str, object]:
+    """连接级心跳：数据帧而非注释，浏览器 JS 才能观察存活。"""
+    return {"type": "ping", "seq": seq, "ts": int(time.time() * 1000)}
+
+
+def quote_payload(
+    instrument_id: str, last: float, prev_close: float, timestamp: int, seq: int
+) -> dict[str, object]:
+    """报价载荷：只给最新价与昨收，涨跌幅由消费端派生；结构与其他品种帧一致。"""
     return {
         "type": "quote",
+        "seq": seq,
+        "ts": int(time.time() * 1000),
         "instrumentId": instrument_id,
-        "last": last,
-        "prevClose": prev_close,
-        "timestamp": timestamp,
+        "quote": {"last": last, "prevClose": prev_close, "timestamp": timestamp},
     }
 
 

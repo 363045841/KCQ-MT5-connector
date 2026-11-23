@@ -5,7 +5,7 @@
 系统 SHALL 提供 `GET /api/v1/market-data/sources/mt5/ticks/stream?symbol=<SYMBOL>`，
 流身份 SHALL 仅由 symbol 决定（tick 与 period / barAggregation 无关）。响应 SHALL 携带
 `X-Accel-Buffering: no` 与 no-cache 头，并复用与 Bar 流一致的 seq、环形缓冲、
-Last-Event-ID 与 keepalive 语义。symbol 为空时 SHALL 返回 400 INVALID_REQUEST。
+Last-Event-ID 与 ping 数据帧语义。symbol 为空时 SHALL 返回 400 INVALID_REQUEST。
 
 #### Scenario: 新订阅
 

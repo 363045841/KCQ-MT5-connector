@@ -90,8 +90,9 @@ def test_snapshot_frame_payload_shape():
     from mt5connector.frames import Bar, SnapshotFrame, frame_payload
 
     frame = SnapshotFrame("mt5:XAUUSD", (Bar(1000, 1, 2, 0.5, 1.5, 10, 0),))
-    payload = frame_payload(frame)
+    payload = frame_payload(frame, 0)
     assert payload["type"] == "snapshot"
+    assert payload["seq"] == 0
     assert payload["instrumentId"] == "mt5:XAUUSD"
     assert payload["bars"][0]["timestamp"] == 1000
     assert payload["bars"][0]["close"] == 1.5

@@ -2,60 +2,88 @@
 
 ## Purpose
 
-SSE 实时 K 线流：连接器单采样循环轮询 MT5，把尾部变化以帧推送给订阅者。
-设计约束来自决策：MT5 Python 包无推送回调（轮询不可避免）；单连接固定订阅一个
-(symbol, period)，切品种 = 前端断开重连。
+SSE 实时行情流：一条连接承载一组品种订阅，服务端按品种路由快照与增量帧。
+连接状态、退避与重连节奏归客户端；服务端只负责快照、增量与存活信号。
 
 ## Requirements
 
-### Requirement: 单连接固定订阅
+### Requirement: 多品种订阅与连接参数
 
-系统 SHALL 提供 `GET /api/v1/market-data/sources/mt5/stream?symbol=&period=`，
-每连接固定订阅一个 (symbol, period)。period 不支持时返回 400 UNSUPPORTED_CAPABILITY，
-symbol 为空时返回 400 INVALID_REQUEST。响应 SHALL 携带
-`X-Accel-Buffering: no` 与 no-cache 头。
+系统 SHALL 提供 `GET /api/v1/market-data/sources/mt5/stream?instruments=&period=`，
+`instruments` 为逗号分隔的品种列表，`period` 必填，`barAggregation` 可选。
+报价通道 SHALL 提供 `GET /api/v1/market-data/sources/mt5/quotes?instruments=`。
+不支持的周期或口径 SHALL 返回 400 `UNSUPPORTED_CAPABILITY`；品种为空 SHALL 返回 400 `INVALID_REQUEST`。
+响应 SHALL 携带 `X-Accel-Buffering: no` 与 no-cache 头。
 
-#### Scenario: 新订阅
+#### Scenario: 多品种共享一条连接
 
-- **WHEN** 不带 Last-Event-ID 的连接建立
-- **THEN** 聚合器触发 resnapshot，订阅者收到尾部两根的 `snapshot` 帧（含最后一根收线与当前 forming）
+- **WHEN** 客户端以 `instruments=mt5:XAUUSD,mt5:EURUSD` 建流
+- **THEN** 服务端只建立一条 SSE 连接，帧按 `instrumentId` 区分品种
 
-#### Scenario: 品种名按原样透传
+#### Scenario: 品种身份原样透传
 
-- **WHEN** 订阅请求携带含大小写的品种名
-- **THEN** 系统按原样向 MT5 查询该品种，不得做大小写归一（MT5 品种名大小写敏感）
+- **WHEN** 请求携带大小写混写的品种
+- **THEN** 系统按原样查询 MT5，帧内 `instrumentId` 与订阅一致
 
-### Requirement: 帧协议四类型
+### Requirement: 帧信封与序号
 
-帧载荷 SHALL 为 JSON 对象，`type` 字段取值：
-`snapshot`（bars 数组）/ `forming`（单根 OHLCV 更新，openTime 不变）/
-`closed`（openTime 前移后旧根终值，容忍终端缓存滞后的修订）/
-`status`（open/closed/degraded，无 bar）。每帧 SHALL 带 `id: <seq>`，
-seq 为流内单调递增整数。
+每帧 SHALL 为 JSON，统一信封 `{type, seq, ts}`：`seq` 是连接级单调递增序号
+（`hello` 为 -1，之后从 0 递增），`ts` 是服务端毫秒时间。
+`hello` SHALL 是连接首帧，携带 `instruments` 与 `snapshotSize`；报价通道的 `snapshotSize` 为 0。
 
-#### Scenario: 收线判定
+#### Scenario: 首帧回显订阅身份
 
-- **WHEN** 相邻两次采样中末根 openTime 前移
-- **THEN** 发布一帧 `closed`（终值取新采样中该时间戳的值）与一帧新根 `forming`，且该终值不再重复以 forming 发出
+- **WHEN** 客户端建立连接
+- **THEN** 第一帧是 `hello`，其 `instruments` 与服务端实际接受的一致
 
-#### Scenario: 内容去重
+### Requirement: 快照与增量帧
 
-- **WHEN** 连续两次采样尾部完全一致
-- **THEN** 不发布任何帧
+`snapshot` SHALL 携带 `instrumentId` 与 `bars`（尾部快照）。
+`bar` SHALL 携带 `instrumentId`、`state`（`forming` | `closed`）与 `bar`。
 
-### Requirement: Last-Event-ID 补帧与 keepalive
+#### Scenario: 收线终值
 
-断线重连时系统 SHALL 按 `Last-Event-ID` 从每流环形缓冲（默认 500 帧）重放
-seq 大于该值的帧；重放与实时队列的重叠帧按 seq 去重。空闲超过 15s SHALL 发送
-`: keepalive` 注释帧维持连接。新订阅的基准 seq SHALL 在触发快照发布之前捕获，
-避免快照帧被去重逻辑吞掉。
+- **WHEN** 采样发现末根 openTime 前移
+- **THEN** 先发 `bar`（`state: closed`，终值取新采样中该时间戳的值），再发 `bar`（`state: forming`）；该终值不再以 forming 重复发出
 
-#### Scenario: 断线重连补帧
+#### Scenario: 无变化不推帧
+
+- **WHEN** 采样结果与上次完全一致
+- **THEN** 不下发任何行情帧
+
+### Requirement: 报价、状态与心跳帧
+
+`quote` SHALL 携带 `instrumentId` 与 `quote: {last, prevClose, timestamp}`。
+`status` SHALL 携带 `instrumentId`、`status`（`live` | `market-closed` | `upstream-error`）与可选 `detail`。
+`ping` SHALL 每 15 秒下发一次，且必须是数据帧而不是 SSE 注释，客户端据此判断存活。
+
+#### Scenario: 上游异常上浮
+
+- **WHEN** 轮询上游抛错
+- **THEN** 下发 `status`（`upstream-error`，`detail` 携带原因），连接保持可重试
+
+### Requirement: 报价派生
+
+报价帧 SHALL 由增量帧的尾部窗口派生：`last` 取最新根收盘、`prevClose` 取上一根收盘，
+涨跌幅由消费端计算；尾部不足两根时 SHALL NOT 下发报价帧。
+
+#### Scenario: 有待比基准才推报价
+
+- **WHEN** 订阅品种的尾部窗口至少有两根 K 线
+- **THEN** 下发一帧 `quote`；同一基准重复出现时不重复推送
+
+### Requirement: Last-Event-ID 回放与存活
+
+断线重连时客户端可携带 `Last-Event-ID`，服务端 SHALL 从环形缓冲回放 seq 大于该值的帧，
+再无缝衔接实时帧；回放与实时队列的重叠帧按 seq 去重。
+新订阅的基准 seq SHALL 在触发快照发布之前捕获，回放逻辑不得补进快照之前的帧。
+
+#### Scenario: 从环缓冲续接
 
 - **WHEN** 客户端带 `Last-Event-ID: N` 重连
-- **THEN** 立即收到缓冲中 seq > N 的帧，随后无缝衔接实时帧
+- **THEN** 依次收到缓冲中 seq > N 的帧，随后是无缝衔接的实时帧
 
-#### Scenario: 订阅关闭回收
+#### Scenario: 观测者关闭
 
 - **WHEN** 连接断开
-- **THEN** 订阅队列被移除、观察者计数递减；最后一个观察者离开后轮询任务进入后台宽限期再退出
+- **THEN** 该连接的观察者被移除，最后一个观察者离开后轮询任务在后台自行退出

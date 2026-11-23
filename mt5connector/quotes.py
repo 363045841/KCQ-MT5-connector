@@ -16,7 +16,7 @@ class QuoteProjection:
         self._bars: dict[str, list[Bar]] = {}
         self._emitted: dict[str, tuple[float, float]] = {}
 
-    def push(self, frame: Frame) -> dict[str, object] | None:
+    def push(self, frame: Frame, seq: int) -> dict[str, object] | None:
         """送入一帧；产生新的报价才返回载荷，其余帧返回 None。"""
         if isinstance(frame, SnapshotFrame):
             self._bars[frame.instrument_id] = list(frame.bars)[-_KEEP_BARS:]
@@ -24,7 +24,7 @@ class QuoteProjection:
             self._upsert(frame.instrument_id, frame.bar)
         else:
             return None
-        return self._quote(frame.instrument_id)
+        return self._quote(frame.instrument_id, seq)
 
     def _upsert(self, instrument_id: str, bar: Bar) -> None:
         """按时间戳升序插入或覆盖，只保留尾部窗口。"""
@@ -40,7 +40,7 @@ class QuoteProjection:
             bars.append(bar)
         del bars[:-_KEEP_BARS]
 
-    def _quote(self, instrument_id: str) -> dict[str, object] | None:
+    def _quote(self, instrument_id: str, seq: int) -> dict[str, object] | None:
         """倒数两根即最新价与昨收；不足两根时没有可比的基准。"""
         bars = self._bars.get(instrument_id, [])
         if len(bars) < 2:
@@ -50,4 +50,4 @@ class QuoteProjection:
         if self._emitted.get(instrument_id) == marker:
             return None
         self._emitted[instrument_id] = marker
-        return quote_payload(instrument_id, last.close, previous.close, last.time_ms)
+        return quote_payload(instrument_id, last.close, previous.close, last.time_ms, seq)

@@ -195,7 +195,7 @@ class Aggregator:
                 if open_now is not market_open:
                     market_open = open_now
                     if open_now is not None:
-                        status = "open" if open_now else "closed"
+                        status = "live" if open_now else "market-closed"
                         self._hub.publish(key, StatusFrame(instrument_id(symbol), status))
 
                 if not first_sample_done and not woken and not quote_tick_changed:
@@ -211,7 +211,7 @@ class Aggregator:
                 raise
             except Exception as exc:  # noqa: BLE001 — 单流故障不拖垮全局
                 logger.warning("poll %s failed: %s", key, exc)
-                self._hub.publish(key, StatusFrame(instrument_id(symbol), "degraded", str(exc)))
+                self._hub.publish(key, StatusFrame(instrument_id(symbol), "upstream-error", str(exc)))
                 quiet += 1
             next_interval = self._current_interval(key, quiet)
 

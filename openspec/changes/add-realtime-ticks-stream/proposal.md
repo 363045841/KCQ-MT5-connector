@@ -14,7 +14,7 @@ MT5 终端能提供逐笔 tick，但连接器目前只把 `symbol_info_tick` 当
   `timestamp` 为真 UTC 毫秒。
 - 网关新增 `copy_ticks_from` 增量拉取（经单工作线程串行执行），返回完整 tick 序列；
   禁止用 `symbol_info_tick` 的「最后一笔」轮询冒充逐笔流（会丢中间 tick）。
-- 复用 StreamHub 的 seq / 环形缓冲 / Last-Event-ID / keepalive 语义。
+- 复用 StreamHub 的 seq / 环形缓冲 / Last-Event-ID / ping 心跳语义。
 - 新增 tick 轮询间隔等配置，集中收口到 `app/config.py`。
 
 ## Non-goals

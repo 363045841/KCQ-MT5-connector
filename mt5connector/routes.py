@@ -25,7 +25,7 @@ from .bar_aggregation import (
 )
 from .clock import ServerClock
 from .config import Settings
-from .frames import Bar, frame_payload, quote_payload
+from .frames import Bar, frame_payload, hello_payload, ping_payload
 from .gateway import Mt5Gateway
 from .hub import RingEntry, StreamHub
 from .quotes import QuoteProjection
@@ -520,16 +520,22 @@ async def stream(
     async def event_stream():
         sink: asyncio.Queue[RingEntry] = asyncio.Queue()
         pumps = [asyncio.create_task(_pump(queue, sink)) for _, queue in subscriptions]
+        seq = 0
         try:
+            yield _sse_data(
+                hello_payload(tuple(symbol for _, symbol in parsed), settings.snapshot_bars)
+            )
             while True:
                 try:
                     entry = await asyncio.wait_for(
                         sink.get(), timeout=settings.sse_keepalive_seconds
                     )
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    yield _sse_data(ping_payload(seq))
+                    seq += 1
                     continue
-                yield _sse_data(frame_payload(entry.frame))
+                yield _sse_data(frame_payload(entry.frame, seq))
+                seq += 1
         finally:
             for pump in pumps:
                 pump.cancel()
@@ -568,18 +574,22 @@ async def quotes(instruments: str, request: Request):
     async def event_stream():
         sink: asyncio.Queue[RingEntry] = asyncio.Queue()
         pumps = [asyncio.create_task(_pump(queue, sink)) for _, queue in subscriptions]
+        seq = 0
         try:
+            yield _sse_data(hello_payload(tuple(symbol for _, symbol in parsed), 0))
             while True:
                 try:
                     entry = await asyncio.wait_for(
                         sink.get(), timeout=settings.sse_keepalive_seconds
                     )
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    yield _sse_data(ping_payload(seq))
+                    seq += 1
                     continue
-                quote = projection.push(entry.frame)
+                quote = projection.push(entry.frame, seq)
                 if quote is not None:
                     yield _sse_data(quote)
+                    seq += 1
         finally:
             for pump in pumps:
                 pump.cancel()
@@ -642,5 +652,5 @@ async def ticks_stream(symbol: str, request: Request):
 
 def _sse_chunk(entry: RingEntry) -> str:
     """单流帧 → 带 id 的 SSE 报文（供 Last-Event-ID 重放）。"""
-    payload = json.dumps(frame_payload(entry.frame), ensure_ascii=False)
+    payload = json.dumps(frame_payload(entry.frame, entry.seq), ensure_ascii=False)
     return f"id: {entry.seq}\ndata: {payload}\n\n"

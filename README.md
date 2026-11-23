@@ -12,7 +12,9 @@ FastAPI（mt5connector/routes.py）
   ├─ GET  /api/v1/market-data/sources/mt5/probe        探测 + 对齐状态上报
   ├─ POST /api/v1/market-data/instruments/search        品种目录搜索
   ├─ POST /api/v1/market-data/bars                      历史 K 线（游标分页）
-  └─ GET  /api/v1/market-data/sources/mt5/stream        SSE 实时帧（snapshot/forming/closed/status）
+  ├─ GET  /api/v1/market-data/sources/mt5/stream        SSE 实时 K 线帧（hello/snapshot/bar/status/ping）
+  ├─ GET  /api/v1/market-data/sources/mt5/quotes        SSE 实时报价帧（hello/quote/ping）
+  └─ GET  /api/v1/market-data/sources/mt5/ticks/stream  SSE 逐笔成交帧（hello/ticks/ping）
 ```
 
 - **实时链路**：连接器单采样循环轮询 MT5 → SSE 单连接推帧。无 WebSocket、无浏览器轮询。

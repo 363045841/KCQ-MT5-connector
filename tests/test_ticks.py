@@ -8,7 +8,7 @@ import json
 import time
 
 from mt5connector.config import Settings
-from mt5connector.frames import Tick, TicksFrame, frame_payload, frame_type
+from mt5connector.frames import Tick, TicksFrame, frame_payload
 from mt5connector.main import create_app
 from conftest import FakeGateway
 from fastapi.testclient import TestClient
@@ -19,12 +19,14 @@ _TICKS_PATH = "/api/v1/market-data/sources/mt5/ticks/stream"
 def test_tick_frame_payload_shape():
     frame = TicksFrame("XAUUSD", (Tick(1000, 1.0, 1.1, 1.05, 2.0),))
 
-    assert frame_type(frame) == "ticks"
-    assert frame_payload(frame) == {
-        "type": "ticks",
-        "symbol": "XAUUSD",
-        "ticks": [{"timestamp": 1000, "bid": 1.0, "ask": 1.1, "last": 1.05, "volume": 2.0}],
-    }
+    assert frame_payload(frame, 3)["type"] == "ticks"
+    payload = frame_payload(frame, 3)
+    assert payload["type"] == "ticks"
+    assert payload["seq"] == 3
+    assert payload["symbol"] == "XAUUSD"
+    assert payload["ticks"] == [
+        {"timestamp": 1000, "bid": 1.0, "ask": 1.1, "last": 1.05, "volume": 2.0}
+    ]
 
 
 def test_ticks_stream_emits_ticks_frame(fake_gateway: FakeGateway):

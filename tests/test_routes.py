@@ -321,7 +321,8 @@ async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
     snapshot_msg = next(
         m
         for m in events
-        if m["type"] == "http.response.body" and b"snapshot" in m.get("body", b"")
+        if m["type"] == "http.response.body"
+        and (b'"type": "snapshot"' in m.get("body", b"") or b'"type":"snapshot"' in m.get("body", b""))
     )
     return start_msg, snapshot_msg["body"].decode()
 
@@ -595,7 +596,8 @@ async def _first_sse_chunk(app, symbol: str = "XAUUSD"):
     snapshot_msg = next(
         m
         for m in events
-        if m["type"] == "http.response.body" and b"snapshot" in m.get("body", b"")
+        if m["type"] == "http.response.body"
+        and (b'"type": "snapshot"' in m.get("body", b"") or b'"type":"snapshot"' in m.get("body", b""))
     )
     return start_msg, snapshot_msg["body"].decode()
 
@@ -835,5 +837,5 @@ def test_quotes_project_latest_and_previous_close(fake_gateway: FakeGateway):
     line = next(line for line in body.splitlines() if '"type": "quote"' in line)
     payload = json.loads(line[len("data: "):])
     assert payload["instrumentId"] == "mt5:XAUUSD"
-    assert payload["last"] == 11
-    assert payload["prevClose"] == 10
+    assert payload["quote"]["last"] == 11
+    assert payload["quote"]["prevClose"] == 10
